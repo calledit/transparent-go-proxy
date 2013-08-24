@@ -38,7 +38,7 @@ func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 
 func PageRequested(w http.ResponseWriter, r *http.Request) {
 
-	AllowCommpressContents := []string{"image", "audio", "video"}
+	DontRemoveCompressonOn := []string{"image", "audio", "video"}
 	UrlBlocks := []string{"/ad", "poker", "track", "facebook.", "apple-touch-icon-precomposed.png'"}
 	//fix difrences in incoming and outgoing http.Request
 	r.RequestURI = ""
@@ -58,7 +58,7 @@ func PageRequested(w http.ResponseWriter, r *http.Request) {
 	RemoveCommpression := true
 	if val, ok := r.Header["Accept"]; ok {
 		for _, vv := range val {
-			for _, ContType := range AllowCommpressContents {
+			for _, ContType := range DontRemoveCompressonOn {
 				if strings.Contains(vv, ContType) {
 					RemoveCommpression = false
 				}

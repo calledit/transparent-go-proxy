@@ -38,17 +38,30 @@ func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 
 func PageRequested(w http.ResponseWriter, r *http.Request) {
 
+	AllowCommpressContents := []string{"image", "audio", "video"}
+	UrlBlocks := []string{"/ad", "poker", "track", "facebook.", "apple-touch-icon-precomposed.png'"}
 	//fix difrences in incoming and outgoing http.Request
 	r.RequestURI = ""
 	r.URL.Host = r.Host
 	r.URL.Scheme = "http"
 
+	for _, BlockString := range UrlBlocks {
+		if strings.Contains(r.URL.String(), BlockString) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(410)
+			w.Write([]byte("Blocked: '" + BlockString + "' in url."))
+			return
+		}
+	}
 	log.Println("URL", r.URL)
+
 	RemoveCommpression := true
 	if val, ok := r.Header["Accept"]; ok {
 		for _, vv := range val {
-			if strings.Contains(vv, "image") {
-				RemoveCommpression = false
+			for _, ContType := range AllowCommpressContents {
+				if strings.Contains(vv, ContType) {
+					RemoveCommpression = false
+				}
 			}
 		}
 	}

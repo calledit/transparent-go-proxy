@@ -22,6 +22,7 @@ type BlockString struct {
     NotText string
 }
 
+var ConID int
 func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 	Befn := 0
 	if !ins.HasInserted {
@@ -117,9 +118,16 @@ func PageRequested(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, resp.Body)
 	}
 	resp.Body.Close()
-}*/
+}
+*/
+
+
 
 func HandleClient(Sc *httputil.ServerConn){
+
+    ThisClient := ConID
+    ConID++    
+
 	DontRemoveCompressonOn := []string{"image", "audio", "video"}
 	UrlBlocks := []BlockString{{".ad",".add"},{"/ad","/add"}, {Text:"poker"}, {Text:"track"}, {Text:"facebook."}, {Text:"apple-touch-icon-precomposed.png"},{Text:"annotations_invideo"}}
 
@@ -160,7 +168,6 @@ func HandleClient(Sc *httputil.ServerConn){
                         Close: true,
                     }
                     resp.Header.Set("Content-Type", "text/html")
-                    resp.Header.Set("Connection", "close")
                     log.Println("Blocked:", r.URL,BlockString.Text, "in url")
                     Blocked = true
                     Sc.Write(r, resp)
@@ -172,7 +179,7 @@ func HandleClient(Sc *httputil.ServerConn){
             continue
         }
         
-	    log.Println("URL", r.URL)
+	    log.Println(ThisClient,"URL", r.URL)
         
         //We remove compression on Requests that we might want to alter
         RemoveCommpression := true
@@ -204,12 +211,18 @@ func HandleClient(Sc *httputil.ServerConn){
 	    if err != nil {
             return
 	    }
+        if resp.ContentLength == 0 {
+            //There is a bug in some subsystem here that causes one to have to set The encoding to identity when the size is zero
+            resp.TransferEncoding = []string{"identity"}
+        }
+        
         Sc.Write(r, resp)
     }
 }
 
 func main() {
 	//tr = &http.Transport{}
+    ConID = 0
 
     l, err := net.Listen("tcp", ":8181")
     if err != nil {

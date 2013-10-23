@@ -3,14 +3,23 @@ package main
 import (
 	"bytes"
 	"io"
+    "io/ioutil"
 	"log"
 	"net/http"
+    "net/http/httputil"
+    "time"
+    "net"
 	"strings"
 )
 
 type ScriptInserter struct {
 	Browser     io.Writer
 	HasInserted bool
+}
+
+type BlockString struct {
+    Text string
+    NotText string
 }
 
 func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
@@ -36,22 +45,29 @@ func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 	n, err = ins.Browser.Write(p)
 	return n + Befn, err
 }
-
+/*
+var tr *http.Transport
 func PageRequested(w http.ResponseWriter, r *http.Request) {
 
 	DontRemoveCompressonOn := []string{"image", "audio", "video"}
-	UrlBlocks := []string{"/ad", "poker", "track", "facebook.", "apple-touch-icon-precomposed.png'"}
+	UrlBlocks := []BlockString{{".ad",".add"},{"/ad","/add"}, {Text:"poker"}, {Text:"track"}, {Text:"facebook."}, {Text:"apple-touch-icon-precomposed.png"},{Text:"annotations_invideo"}}
+
+
 	//fix difrences in incoming and outgoing http.Request
 	r.RequestURI = ""
 	r.URL.Host = r.Host
 	r.URL.Scheme = "http"
 
+    UrlString := r.URL.String()
 	for _, BlockString := range UrlBlocks {
-		if strings.Contains(r.URL.String(), BlockString) {
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(410)
-			w.Write([]byte("Blocked: '" + BlockString + "' in url."))
-			return
+		if strings.Contains(UrlString, BlockString.Text) {
+            if BlockString.NotText == "" || !strings.Contains(UrlString, BlockString.NotText) {
+			    w.Header().Set("Content-Type", "text/html")
+			    w.WriteHeader(410)
+	            log.Println("Blocked:", r.URL,BlockString.Text, "in url")
+			    w.Write([]byte("Blocked: '" + BlockString.Text + "' in url."))
+			    return
+            }
 		}
 	}
 	log.Println("URL", r.URL)
@@ -69,7 +85,6 @@ func PageRequested(w http.ResponseWriter, r *http.Request) {
 	if RemoveCommpression {
 		r.Header.Del("Accept-Encoding")
 	}
-	tr := &http.Transport{}
 	resp, err := tr.RoundTrip(r)
 	if err != nil {
 		panic(err)
@@ -102,9 +117,126 @@ func PageRequested(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, resp.Body)
 	}
 	resp.Body.Close()
+}*/
+
+func HandleClient(Sc *httputil.ServerConn){
+	DontRemoveCompressonOn := []string{"image", "audio", "video"}
+	UrlBlocks := []BlockString{{".ad",".add"},{"/ad","/add"}, {Text:"poker"}, {Text:"track"}, {Text:"facebook."}, {Text:"apple-touch-icon-precomposed.png"},{Text:"annotations_invideo"}}
+
+    HasConnected := false
+    var ServerConnection *httputil.ClientConn
+
+    defer Sc.Close()
+    for {
+        
+        //Wait untill the client sends a new request
+        r, err := Sc.Read()
+        //Client closed the conenction
+        if err != nil {
+            break
+        }
+
+	    //fix difrences in incoming and outgoing http.Request
+	    r.RequestURI = ""
+	    r.URL.Host = r.Host
+	    r.URL.Scheme = "http"
+
+        //Block any websites that contain blocked words in their url
+        UrlString := r.URL.String()
+        Blocked := false
+        for _, BlockString := range UrlBlocks {
+            if strings.Contains(UrlString, BlockString.Text) {
+                if BlockString.NotText == "" || !strings.Contains(UrlString, BlockString.NotText) {
+                    Infotext := "Blocked: '" + BlockString.Text + "' in url."
+                    resp := &http.Response{
+                        Status: "410 Gone",
+                        StatusCode: 410,
+                        ContentLength: int64(len(Infotext)),
+                        Body: ioutil.NopCloser(strings.NewReader(Infotext)),
+                        Proto: "HTTP/1.0",
+                        ProtoMajor: 1,
+                        ProtoMinor: 1,
+                        Header: make(http.Header),
+                        Close: true,
+                    }
+                    resp.Header.Set("Content-Type", "text/html")
+                    resp.Header.Set("Connection", "close")
+                    log.Println("Blocked:", r.URL,BlockString.Text, "in url")
+                    Blocked = true
+                    Sc.Write(r, resp)
+                    break
+                }
+            }
+        }
+        if Blocked == true {
+            continue
+        }
+        
+	    log.Println("URL", r.URL)
+        
+        //We remove compression on Requests that we might want to alter
+        RemoveCommpression := true
+        if val, ok := r.Header["Accept"]; ok {
+            for _, vv := range val {
+                for _, ContType := range DontRemoveCompressonOn {
+                    if strings.Contains(vv, ContType) {
+                        RemoveCommpression = false
+                    }
+                }
+            }
+        }
+        if RemoveCommpression {
+            r.Header.Del("Accept-Encoding")
+        }
+        if HasConnected == false {
+            NetServerConnection, err := net.Dial("tcp", r.URL.Host+":"+r.URL.Scheme)
+            if err != nil {
+                // handle error
+                return
+            }
+            HasConnected = true
+            ServerConnection = httputil.NewClientConn(NetServerConnection, nil)
+            defer ServerConnection.Close()
+        }
+
+        //Lets get the stuff from our server
+	    resp, err := ServerConnection.Do(r) //ServerConector.RoundTrip(r)
+	    if err != nil {
+            return
+	    }
+        Sc.Write(r, resp)
+    }
 }
 
 func main() {
-	http.HandleFunc("/", PageRequested)
-	http.ListenAndServe(":8181", nil)
+	//tr = &http.Transport{}
+
+    l, err := net.Listen("tcp", ":8181")
+    if err != nil {
+        panic(err)
+    }
+    defer l.Close()
+    var tempDelay time.Duration // how long to sleep on accept failure
+    for {
+        rw, e := l.Accept()
+        if e != nil {
+            if ne, ok := e.(net.Error); ok && ne.Temporary() {
+                if tempDelay == 0 {
+                    tempDelay = 5 * time.Millisecond
+                } else {
+                    tempDelay *= 2
+                }
+                if max := 1 * time.Second; tempDelay > max {
+                    tempDelay = max
+                }
+                log.Printf("http: Accept error: %v; retrying in %v", e, tempDelay)
+                time.Sleep(tempDelay)
+                continue
+            }
+            panic(e)
+        }
+        tempDelay = 0
+        Sc := httputil.NewServerConn(rw, nil)
+        go HandleClient(Sc)
+    }
 }

@@ -212,10 +212,8 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int){
         }
 
         //Lets get the stuff from our server
-	    resp, err := ServerConnection.Do(r) //ServerConector.RoundTrip(r)
-        if err == httputil.ErrPersistEOF {
-            log.Println("Persist error", r.URL.Host)
-        }else if err != nil {
+	    resp, err := ServerConnection.Do(r)
+        if err != nil && err != httputil.ErrPersistEOF {
             log.Println("Server did not answer nicly on our request:", r.URL.Host)
             return
 	    }
@@ -226,9 +224,6 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int){
         }
         
         Sc.Write(r, resp)
-        //if err == httputil.ErrPersistEOF {
-        //    return
-        //}
     }
 }
 

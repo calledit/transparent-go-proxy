@@ -123,10 +123,8 @@ func PageRequested(w http.ResponseWriter, r *http.Request) {
 
 
 
-func HandleClient(Sc *httputil.ServerConn){
+func HandleClient(Sc *httputil.ServerConn, ThisClient int){
 
-    ThisClient := ConID
-    ConID++    
 
 	DontRemoveCompressonOn := []string{"image", "audio", "video"}
 	UrlBlocks := []BlockString{{".ad",".add"},{"/ad","/add"}, {Text:"poker"}, {Text:"track"}, {Text:"facebook."}, {Text:"apple-touch-icon-precomposed.png"},{Text:"annotations_invideo"}}
@@ -141,7 +139,7 @@ func HandleClient(Sc *httputil.ServerConn){
         r, err := Sc.Read()
         //Client closed the conenction
         if err != nil {
-            break
+            return
         }
 
 	    //fix difrences in incoming and outgoing http.Request
@@ -165,19 +163,24 @@ func HandleClient(Sc *httputil.ServerConn){
                         ProtoMajor: 1,
                         ProtoMinor: 1,
                         Header: make(http.Header),
-                        Close: true,
+                        Close: false,
                     }
                     resp.Header.Set("Content-Type", "text/html")
                     log.Println("Blocked:", r.URL,BlockString.Text, "in url")
-                    Blocked = true
                     Sc.Write(r, resp)
+                    Blocked = true
                     break
+                    //continue
                 }
             }
         }
-        if Blocked == true {
+        if Blocked {
             continue
         }
+        //if HasConnected == false {
+        //    log.Println("Client connected:", r.URL.Host)
+        //    defer log.Println("Client disconected:", r.URL.Host)
+        //}
         
 	    log.Println(ThisClient,"URL", r.URL)
         
@@ -196,8 +199,10 @@ func HandleClient(Sc *httputil.ServerConn){
             r.Header.Del("Accept-Encoding")
         }
         if HasConnected == false {
+
             NetServerConnection, err := net.Dial("tcp", r.URL.Host+":"+r.URL.Scheme)
             if err != nil {
+                log.Println("could not connect to server:", r.URL.Host+":"+r.URL.Scheme)
                 // handle error
                 return
             }
@@ -208,15 +213,22 @@ func HandleClient(Sc *httputil.ServerConn){
 
         //Lets get the stuff from our server
 	    resp, err := ServerConnection.Do(r) //ServerConector.RoundTrip(r)
-	    if err != nil {
+        if err == httputil.ErrPersistEOF {
+            log.Println("Persist error", r.URL.Host)
+        }else if err != nil {
+            log.Println("Server did not answer nicly on our request:", r.URL.Host)
             return
 	    }
+        
         if resp.ContentLength == 0 {
             //There is a bug in some subsystem here that causes one to have to set The encoding to identity when the size is zero
             resp.TransferEncoding = []string{"identity"}
         }
         
         Sc.Write(r, resp)
+        //if err == httputil.ErrPersistEOF {
+        //    return
+        //}
     }
 }
 
@@ -250,6 +262,7 @@ func main() {
         }
         tempDelay = 0
         Sc := httputil.NewServerConn(rw, nil)
-        go HandleClient(Sc)
+        ConID++
+        go HandleClient(Sc, ConID)
     }
 }

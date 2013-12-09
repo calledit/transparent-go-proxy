@@ -231,19 +231,37 @@ func TLSConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
     tlsmesage := make([]byte, 2048)
     rlen, _ := rw.Read(tlsmesage)
     if(rlen > 10 && tlsmesage[0] ==  0x16 && tlsmesage[5] ==  0x01) {
-        pos := bytes.LastIndex(tlsmesage, []byte{0x00, 0x0a, 0x00})
+        //pos := bytes.LastIndex(tlsmesage, []byte{0x00, 0x0a, 0x00})
+        pos := bytes.LastIndex(tlsmesage, []byte(".com"))
+        if pos != -1 {
+            pos += 4
+        }
         if pos == -1 {
-            log.Println(ConID, "No SNI tls extention")
+            pos = bytes.LastIndex(tlsmesage, []byte{0x00, 0x0b, 0x00})
+        }
+        if pos == -1 {
+            pos = bytes.LastIndex(tlsmesage, []byte(".com"))
+        }
+        if pos == -1 {
+            log.Println(ConID, "No SNI tls extention",string(""))
         }else{
             firstpos := bytes.LastIndex(tlsmesage[0:pos], []byte{0x00})
-            log.Println(ConID, "TLS:", string(tlsmesage[firstpos+2:pos]))
+            ExtractedHost := string(tlsmesage[firstpos+2:pos])
+            log.Println(ConID, "TLS:", ExtractedHost)
+            if ExtractedHost == ""{
+                log.Println(ConID, "Could not find SNI",string(tlsmesage[:pos]))
+                
+            }
             //If we are to use TLS SNI Extention header as the destination address
             if DestinationAddress == "" {
-                DestinationAddress = string(tlsmesage[firstpos+2:pos])+":https"
+                DestinationAddress = ExtractedHost+":https"
             }
         }
     }else{
         log.Println(ConID, "Not a client message")
+    }
+    if DestinationAddress == "" {
+        return
     }
     for _, AmericanSite := range AmericanSites {
         if strings.Contains(DestinationAddress, AmericanSite) {

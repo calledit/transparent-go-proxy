@@ -10,7 +10,6 @@ import (
     "time"
     "net"
     "errors"
-    //"crypto/tls"
 	"strings"
 )
 
@@ -25,6 +24,7 @@ type BlockString struct {
 }
 
 var ConID int
+var AmericanSites []string
 func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 	Befn := 0
 	if !ins.HasInserted {
@@ -54,7 +54,6 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress st
 
 
 	DontRemoveCompressonOn := []string{"image", "audio", "video"}
-	AmericanSites := []string{"netflix.com"}
 	UrlBlocks := []BlockString{{".ad",".add"},{"/ad","/add"}, {Text:"poker"}, {Text:"track"}, {Text:"facebook."}, {Text:"apple-touch-icon-precomposed.png"},{Text:"annotations_invideo"}}
 
     HasConnected := false
@@ -188,7 +187,8 @@ func GetLogPameters(loglisten *net.UDPConn) (LogMap map[string] string, err erro
     return LogMap, nil
 }
 
-func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn) {
+type ConenctionHandler func(*net.TCPConn, int, string)
+func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH ConenctionHandler) {
     var tempDelay time.Duration // how long to sleep on accept failure
     for {
         rw, e := l.AcceptTCP()
@@ -202,7 +202,7 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn) {
                 if max := 1 * time.Second; tempDelay > max {
                     tempDelay = max
                 }
-                log.Printf("http: Accept error: %v; retrying in %v", e, tempDelay)
+                log.Printf("Accept error: %v; retrying in %v", e, tempDelay)
                 time.Sleep(tempDelay)
                 continue
             }
@@ -211,7 +211,6 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn) {
         tempDelay = 0
 
         DestinationAddress := "" 
-        UseHttps := false
         //Try to get a destination address from IPtables
         if loglisten != nil {
             LogMap, err := GetLogPameters(loglisten)
@@ -219,44 +218,47 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn) {
                 if DestPort, ok := LogMap["DPT"]; ok {
                     if DestServ, ok := LogMap["DST"]; ok {
                         DestinationAddress = DestServ+":"+DestPort
-                        if DestPort == "443" {
-                            UseHttps = true
-                        }
                         log.Println(ConID + 1,"Org:", DestinationAddress)
                     }
                 }
             }
         }
-        if !UseHttps {
-            Sc := httputil.NewServerConn(rw, nil)
-            ConID++
-            go HandleClient(Sc, ConID, DestinationAddress)
+        ConID++
+        conH(rw, ConID, DestinationAddress)
+    }
+}
+func TLSConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
+    tlsmesage := make([]byte, 2048)
+    rlen, _ := rw.Read(tlsmesage)
+    if(rlen > 10 && tlsmesage[0] ==  0x16 && tlsmesage[5] ==  0x01) {
+        pos := bytes.LastIndex(tlsmesage, []byte{0x00, 0x0a, 0x00})
+        if pos == -1 {
+            log.Println(ConID, "No SNI tls extention")
         }else{
-            //if true {
-            //}else{
-                //rw.Close()
-
-            tlsmesage := make([]byte, 2048)
-            rlen, _ := rw.Read(tlsmesage)
-            if(rlen > 10 && tlsmesage[0] ==  0x16 && tlsmesage[5] ==  0x01) {
-		        pos := bytes.LastIndex(tlsmesage, []byte{0x00, 0x0a, 0x00})
-                if pos == -1 {
-                    log.Printf("No SNI tls extention")
-                }else{
-		            firstpos := bytes.LastIndex(tlsmesage[0:pos], []byte{0x00})
-                    log.Println(ConID+1, "TLS:", string(tlsmesage[firstpos+2:pos]))
-                }
-            }else{
-                log.Printf("Not a client message")
+            firstpos := bytes.LastIndex(tlsmesage[0:pos], []byte{0x00})
+            log.Println(ConID, "TLS:", string(tlsmesage[firstpos+2:pos]))
+            //If we are to use TLS SNI Extention header as the destination address
+            if DestinationAddress == "" {
+                DestinationAddress = string(tlsmesage[firstpos+2:pos])+":https"
             }
-            ConID++
-            go TcpProxy(rw, ConID, DestinationAddress, tlsmesage[:rlen])
-            //}
-            
+        }
+    }else{
+        log.Println(ConID, "Not a client message")
+    }
+    for _, AmericanSite := range AmericanSites {
+        if strings.Contains(DestinationAddress, AmericanSite) {
+            log.Println("Tuneling:", DestinationAddress)
+            DestinationAddress = "avpsserver.example.com:8182"
+            break;
         }
     }
-    
+    go TcpProxy(rw, ConID, DestinationAddress, tlsmesage[:rlen])
 }
+func httpConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
+    Sc := httputil.NewServerConn(rw, nil)
+    go HandleClient(Sc, ConID, DestinationAddress)
+}
+
 func CopyCD(In *net.TCPConn, Out *net.TCPConn){
     for {
         data := make([]byte, 256)
@@ -288,6 +290,7 @@ func TcpProxy(Sc *net.TCPConn, ThisClient int, DestinationAddress string, AddDat
 
 func main() {
     ConID = 0
+	AmericanSites = []string{"netflix.com"}
 
     addr,_ := net.ResolveUDPAddr("udp", "127.0.0.1:48786")
     loglisten, err := net.ListenUDP("udp", addr)
@@ -296,12 +299,21 @@ func main() {
     }
     defer loglisten.Close()
 
+    loglisten = nil
     TcAd,_ := net.ResolveTCPAddr("tcp", ":8181")
     l, err := net.ListenTCP("tcp", TcAd)
     if err != nil {
         panic(err)
     }
     defer l.Close()
-    AcceptConenctions(l, loglisten)
+    go AcceptConenctions(l, loglisten, httpConHandler)
+
+    TcAdT,_ := net.ResolveTCPAddr("tcp", ":8182")
+    ltls, err := net.ListenTCP("tcp", TcAdT)
+    if err != nil {
+        panic(err)
+    }
+    defer ltls.Close()
+    AcceptConenctions(ltls, loglisten, TLSConHandler)
 
 }

@@ -9,6 +9,7 @@ import (
     "net/http/httputil"
     "time"
     "net"
+    "errors"
     //"crypto/tls"
 	"strings"
 )
@@ -49,7 +50,7 @@ func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 }
 
 
-func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationServer string){
+func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress string){
 
 
 	DontRemoveCompressonOn := []string{"image", "audio", "video"}
@@ -86,7 +87,7 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationServer str
                         StatusCode: 410,
                         ContentLength: int64(len(Infotext)),
                         Body: ioutil.NopCloser(strings.NewReader(Infotext)),
-                        Proto: "HTTP/1.0",
+                        Proto: "HTTP/1.1",
                         ProtoMajor: 1,
                         ProtoMinor: 1,
                         Header: make(http.Header),
@@ -97,18 +98,14 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationServer str
                     Sc.Write(r, resp)
                     Blocked = true
                     break
-                    //continue
                 }
             }
         }
+        //Skip the rest of this request as we have alredy answerd it
         if Blocked {
             continue
         }
-        //if HasConnected == false {
-        //    log.Println("Client connected:", r.URL.Host)
-        //    defer log.Println("Client disconected:", r.URL.Host)
-        //}
-        
+
 	    log.Println(ThisClient,"URL", r.URL)
         
         //We remove compression on Requests that we might want to alter
@@ -127,21 +124,23 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationServer str
         }
         if HasConnected == false {
             
-            ServerName := DestinationServer;
-            ServerPort := r.URL.Scheme
+            //If we are to use http headers as the destination address
+            if DestinationAddress == "" {
+                DestinationAddress = r.URL.Host+":"+r.URL.Scheme
+            }
+            
+            //Should this connection be tunneld somewere elese
             for _, AmericanSite := range AmericanSites {
-                if strings.Contains(ServerName, AmericanSite) {
-                    log.Println("Forwarding to America:", r.URL.Host)
-                    ServerName = "IPaddress to forward to"
-                    ServerPort = "123";
+                if strings.Contains(r.URL.Host, AmericanSite) {
+                    log.Println("Tuneling:", r.URL.Host)
+                    DestinationAddress = "avpsserver.example.com:8181"
                     break;
                 }
             }
 
-            NetServerConnection, err := net.Dial("tcp", ServerName+":"+ServerPort)
+            NetServerConnection, err := net.Dial("tcp", DestinationAddress)
             if err != nil {
-                log.Println("could not connect to server:", ServerName+":"+ServerPort)
-                // handle error
+                log.Println("could not connect to server:", DestinationAddress)
                 return
             }
             HasConnected = true
@@ -165,10 +164,34 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationServer str
     }
 }
 
-func AcceptConenctions(l net.Listener, loglisten *net.UDPConn) {
+func GetLogPameters(loglisten *net.UDPConn) (LogMap map[string] string, err error){
+    logmesage := make([]byte, 512)
+    loglen,_,err := loglisten.ReadFromUDP(logmesage)
+    if err != nil {
+        log.Println("udp read fail: %s", err)
+        return nil, err
+    }
+    LogParts := strings.Split(string(logmesage[0:loglen]), "] FIREWALL PROXY ")
+    if len(LogParts) != 2 {
+        return nil, errors.New("Could not parse log")
+    }
+    LogParameters := strings.Split(LogParts[1]," ")
+    LogMap = make(map[string] string,len(LogParameters))
+    for _, LogPar := range LogParameters {
+        LogVals := strings.Split(LogPar, "=")
+        if len(LogVals) > 1 {
+            LogMap[LogVals[0]] = LogVals[1]
+        }else{
+            LogMap[LogVals[0]] = ""
+        }
+    }
+    return LogMap, nil
+}
+
+func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn) {
     var tempDelay time.Duration // how long to sleep on accept failure
     for {
-        rw, e := l.Accept()
+        rw, e := l.AcceptTCP()
         if e != nil {
             if ne, ok := e.(net.Error); ok && ne.Temporary() {
                 if tempDelay == 0 {
@@ -186,76 +209,99 @@ func AcceptConenctions(l net.Listener, loglisten *net.UDPConn) {
             panic(e)
         }
         tempDelay = 0
-        logmesage := make([]byte, 512)
-        loglen,_,err := loglisten.ReadFromUDP(logmesage)
-        if err != nil {
-            log.Fatalf("udp read fail: %s", err)
-        }
-        LogParts := strings.Split(string(logmesage[0:loglen]), "] FIREWALL PROXY ")
-        if len(LogParts) != 2 {
-            log.Fatalf("need 2 LogParts: %v", LogParts)
-        }
-        LogParameters := strings.Split(LogParts[1]," ")
-        LogMap := make(map[string] string,len(LogParameters))
-        for _, LogPar := range LogParameters {
-            LogVals := strings.Split(LogPar, "=")
-            if len(LogVals) > 1 {
-                LogMap[LogVals[0]] = LogVals[1]
-            }else{
-                LogMap[LogVals[0]] = ""
+
+        DestinationAddress := "" 
+        UseHttps := false
+        //Try to get a destination address from IPtables
+        if loglisten != nil {
+            LogMap, err := GetLogPameters(loglisten)
+            if err == nil {
+                if DestPort, ok := LogMap["DPT"]; ok {
+                    if DestServ, ok := LogMap["DST"]; ok {
+                        DestinationAddress = DestServ+":"+DestPort
+                        if DestPort == "443" {
+                            UseHttps = true
+                        }
+                        log.Println(ConID + 1,"Org:", DestinationAddress)
+                    }
+                }
             }
-            
         }
-        if val, ok := LogMap["DST"]; ok {
-            log.Println(ConID + 1,"Log Dst:", val)
+        if !UseHttps {
             Sc := httputil.NewServerConn(rw, nil)
             ConID++
-            go HandleClient(Sc, ConID, val)
+            go HandleClient(Sc, ConID, DestinationAddress)
         }else{
-            log.Fatalf("No Destination Paramer in log")
-        }
-        /*if usetls {
-            log.Printf("Got Conenction: %+v", rw)
-            cert, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
-            if err != nil {
-                log.Fatalf("server: loadkeys: %s", err)
+            //if true {
+            //}else{
+                //rw.Close()
+
+            tlsmesage := make([]byte, 2048)
+            rlen, _ := rw.Read(tlsmesage)
+            if(rlen > 10 && tlsmesage[0] ==  0x16 && tlsmesage[5] ==  0x01) {
+		        pos := bytes.LastIndex(tlsmesage, []byte{0x00, 0x0a, 0x00})
+                if pos == -1 {
+                    log.Printf("No SNI tls extention")
+                }else{
+		            firstpos := bytes.LastIndex(tlsmesage[0:pos], []byte{0x00})
+                    log.Println(ConID+1, "TLS:", string(tlsmesage[firstpos+2:pos]))
+                }
+            }else{
+                log.Printf("Not a client message")
             }
-            tlsConfig := tls.Config{Certificates: []tls.Certificate{cert}}
-            tlsrw := tls.Server(rw, &tlsConfig)
-            rw = tlsrw
-            HandErr := tlsrw.Handshake();
-            ConSt := tlsrw.ConnectionState();
-            log.Printf("HandErr: %+v, ConSt: %+v", HandErr, ConSt)
-        }*/
+            ConID++
+            go TcpProxy(rw, ConID, DestinationAddress, tlsmesage[:rlen])
+            //}
+            
+        }
     }
+    
+}
+func CopyCD(In *net.TCPConn, Out *net.TCPConn){
+    for {
+        data := make([]byte, 256)
+        n, err := In.Read(data)
+        if err != nil {
+            return
+        }
+        Out.Write(data[:n])
+    }
+
+}
+
+func TcpProxy(Sc *net.TCPConn, ThisClient int, DestinationAddress string, AddData []byte){
+    TcAd,_ := net.ResolveTCPAddr("tcp", DestinationAddress)
+    NetServerConnection, err := net.DialTCP("tcp", nil, TcAd)
+    if err != nil {
+        log.Println(ThisClient, "could not connect to server:", DestinationAddress)
+        return
+    }
+    NetServerConnection.Write(AddData)
+    defer NetServerConnection.Close()
+    defer Sc.Close()
+    
+    go CopyCD(NetServerConnection, Sc)
+    CopyCD(Sc, NetServerConnection)
+
     
 }
 
 func main() {
-	//tr = &http.Transport{}
     ConID = 0
 
-    addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:48786")
-    if err != nil {
-        log.Fatalf("Could not resolve", err)
-    }
+    addr,_ := net.ResolveUDPAddr("udp", "127.0.0.1:48786")
     loglisten, err := net.ListenUDP("udp", addr)
     if err != nil {
-        log.Fatalf("Could not listen to log messages", err)
+        log.Println("Could not listen to log messages Using http headers instead:", err)
     }
+    defer loglisten.Close()
 
-    l, err := net.Listen("tcp", ":8181")
+    TcAd,_ := net.ResolveTCPAddr("tcp", ":8181")
+    l, err := net.ListenTCP("tcp", TcAd)
     if err != nil {
         panic(err)
     }
     defer l.Close()
     AcceptConenctions(l, loglisten)
 
-    /*ltls, err := net.Listen("tcp", ":8182")
-    if err != nil {
-        panic(err)
-    }
-    defer ltls.Close()
-    AcceptConenctions(ltls, true)
-    */
 }

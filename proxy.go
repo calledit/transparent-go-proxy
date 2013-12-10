@@ -227,35 +227,20 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
         conH(rw, ConID, DestinationAddress)
     }
 }
+
+
+
 func TLSConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
     tlsmesage := make([]byte, 2048)
     rlen, _ := rw.Read(tlsmesage)
-    if(rlen > 10 && tlsmesage[0] ==  0x16 && tlsmesage[5] ==  0x01) {
-        //pos := bytes.LastIndex(tlsmesage, []byte{0x00, 0x0a, 0x00})
-        pos := bytes.LastIndex(tlsmesage, []byte(".com"))
-        if pos != -1 {
-            pos += 4
-        }
-        if pos == -1 {
-            pos = bytes.LastIndex(tlsmesage, []byte{0x00, 0x0b, 0x00})
-        }
-        if pos == -1 {
-            pos = bytes.LastIndex(tlsmesage, []byte(".com"))
-        }
-        if pos == -1 {
-            log.Println(ConID, "No SNI tls extention",string(""))
-        }else{
-            firstpos := bytes.LastIndex(tlsmesage[0:pos], []byte{0x00})
-            ExtractedHost := string(tlsmesage[firstpos+2:pos])
-            log.Println(ConID, "TLS:", ExtractedHost)
-            if ExtractedHost == ""{
-                log.Println(ConID, "Could not find SNI",string(tlsmesage[:pos]))
-                
-            }
-            //If we are to use TLS SNI Extention header as the destination address
-            if DestinationAddress == "" {
-                DestinationAddress = ExtractedHost+":https"
-            }
+    if(rlen > 42 && tlsmesage[0] ==  0x16 && tlsmesage[5] ==  0x01) {
+        //If we are to use TLS SNI Extention header as the destination address
+        ExtractedHost := clientHelloMsg(tlsmesage[5:rlen])
+
+        if ExtractedHost == ""{
+            log.Println(ConID, "Could not find SNI")
+        }else if DestinationAddress == "" {
+            DestinationAddress = ExtractedHost+":https"
         }
     }else{
         log.Println(ConID, "Not a client message")
@@ -263,6 +248,7 @@ func TLSConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
     if DestinationAddress == "" {
         return
     }
+    log.Println(ConID, "TLS:", DestinationAddress)
     for _, AmericanSite := range AmericanSites {
         if strings.Contains(DestinationAddress, AmericanSite) {
             log.Println("Tuneling:", DestinationAddress)
@@ -334,4 +320,82 @@ func main() {
     defer ltls.Close()
     AcceptConenctions(ltls, loglisten, TLSConHandler)
 
+}
+
+func clientHelloMsg(data []byte) string {
+	if len(data) < 42 {
+		return ""
+	}
+	sessionIdLen := int(data[38])
+	if sessionIdLen > 32 || len(data) < 39+sessionIdLen {
+		return ""
+	}
+	data = data[39+sessionIdLen:]
+	if len(data) < 2 {
+		return ""
+	}
+	// cipherSuiteLen is the number of bytes of cipher suite numbers. Since
+	// they are uint16s, the number must be even.
+	cipherSuiteLen := int(data[0])<<8 | int(data[1])
+	if cipherSuiteLen%2 == 1 || len(data) < 2+cipherSuiteLen {
+		return ""
+	}
+	data = data[2+cipherSuiteLen:]
+	if len(data) < 1 {
+		return ""
+	}
+	compressionMethodsLen := int(data[0])
+	if len(data) < 1+compressionMethodsLen {
+		return ""
+	}
+
+	data = data[1+compressionMethodsLen:]
+
+
+	if len(data) < 2 {
+		return ""
+	}
+
+	extensionsLength := int(data[0])<<8 | int(data[1])
+	data = data[2:]
+	if extensionsLength != len(data) {
+		return ""
+	}
+
+	for len(data) != 0 {
+		if len(data) < 4 {
+			return ""
+		}
+		extension := uint16(data[0])<<8 | uint16(data[1])
+		length := int(data[2])<<8 | int(data[3])
+		data = data[4:]
+		if len(data) < length {
+			return ""
+		}
+
+		if extension == 0 {
+			if length < 2 {
+				return ""
+			}
+			numNames := int(data[0])<<8 | int(data[1])
+			d := data[2:]
+			for i := 0; i < numNames; i++ {
+				if len(d) < 3 {
+					return ""
+				}
+				nameType := d[0]
+				nameLen := int(d[1])<<8 | int(d[2])
+				d = d[3:]
+				if len(d) < nameLen {
+					return ""
+				}
+				if nameType == 0 {
+					return string(d[0:nameLen])
+				}
+				d = d[nameLen:]
+			}
+		}
+		data = data[length:]
+	}
+	return ""
 }

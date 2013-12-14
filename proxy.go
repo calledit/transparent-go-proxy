@@ -132,7 +132,7 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress st
             for _, AmericanSite := range AmericanSites {
                 if strings.Contains(r.URL.Host, AmericanSite) {
                     log.Println("Tuneling:", r.URL.Host)
-                    DestinationAddress = "avpsserver.example.com:8181"
+                    DestinationAddress = "avpsserver.example.com:80"
                     break;
                 }
             }
@@ -241,6 +241,8 @@ func TLSConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
             log.Println(ConID, "Could not find SNI")
         }else if DestinationAddress == "" {
             DestinationAddress = ExtractedHost+":https"
+        }else{
+            log.Println(ConID, "ExtractedHost: ", ExtractedHost)
         }
     }else{
         log.Println(ConID, "Not a client message")
@@ -252,7 +254,7 @@ func TLSConHandler(rw *net.TCPConn,  ConID int, DestinationAddress string){
     for _, AmericanSite := range AmericanSites {
         if strings.Contains(DestinationAddress, AmericanSite) {
             log.Println("Tuneling:", DestinationAddress)
-            DestinationAddress = "avpsserver.example.com:8182"
+            DestinationAddress = "avpsserver.example.com:443"
             break;
         }
     }
@@ -270,7 +272,10 @@ func CopyCD(In *net.TCPConn, Out *net.TCPConn){
         if err != nil {
             return
         }
-        Out.Write(data[:n])
+        n, err = Out.Write(data[:n])
+        if err != nil {
+            return
+        }
     }
 
 }

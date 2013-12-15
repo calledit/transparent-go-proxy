@@ -24,6 +24,7 @@ type BlockString struct {
 }
 
 var ConID int
+var IsInAmerica bool
 var AmericanSites []string
 var ApprovedSenders []string
 
@@ -51,6 +52,10 @@ func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 	return n + Befn, err
 }
 
+func httpConHandler(rw *net.TCPConn, ConID int, DestinationAddress string) {
+	Sc := httputil.NewServerConn(rw, nil)
+	HandleClient(Sc, ConID, DestinationAddress)
+}
 func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress string) {
 
 	DontRemoveCompressonOn := []string{"image", "audio", "video"}
@@ -128,14 +133,10 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress st
 				DestinationAddress = r.URL.Host + ":" + r.URL.Scheme
 			}
 
-			//Should this connection be tunneld somewere elese
-			for _, AmericanSite := range AmericanSites {
-				if strings.Contains(r.URL.Host, AmericanSite) {
-					log.Println("Tuneling:", r.URL.Host)
-					DestinationAddress = "avpsserver.example.com:80"
-					break
-				}
-			}
+            DestinationAddress = FilterAmericanSites(DestinationAddress, "avpsserver.example.com:80")
+	        if DestinationAddress == "" {
+		        return
+	        }
 
 			NetServerConnection, err := net.Dial("tcp", DestinationAddress)
 			if err != nil {
@@ -162,6 +163,54 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress st
 		Sc.Write(r, resp)
 	}
 }
+
+func FilterAmericanSites(DestinationAddress string, ProxyServer string) string {
+    IsAmericanSite := false
+	for _, AmericanSite := range AmericanSites {
+		if strings.Contains(DestinationAddress, AmericanSite) {
+            IsAmericanSite = true
+            if !IsInAmerica {
+			    log.Println("Tuneling:", DestinationAddress)
+			    return ProxyServer
+            }
+		}
+	}
+    if IsInAmerica && !IsAmericanSite {
+		log.Println(ConID, "American Server can only access american sites")
+        return ""
+    }
+    return DestinationAddress
+}
+
+func TLSConHandler(rw *net.TCPConn, ConID int, DestinationAddress string) {
+	defer rw.Close()
+	tlsmesage := make([]byte, 2048)
+	rlen, _ := rw.Read(tlsmesage)
+	if rlen > 42 && tlsmesage[0] == 0x16 && tlsmesage[5] == 0x01 {
+		//If we are to use TLS SNI Extention header as the destination address
+		ExtractedHost := clientHelloMsg(tlsmesage[5:rlen])
+
+		if ExtractedHost == "" {
+			log.Println(ConID, "Could not find SNI")
+		} else if DestinationAddress == "" {
+			DestinationAddress = ExtractedHost + ":https"
+		} else {
+			log.Println(ConID, "ExtractedHost: ", ExtractedHost)
+		}
+	} else {
+		log.Println(ConID, "Not a client message")
+	}
+	if DestinationAddress == "" {
+		return
+	}
+	log.Println(ConID, "TLS:", DestinationAddress)
+    DestinationAddress = FilterAmericanSites(DestinationAddress, "avpsserver.example.com:443")
+	if DestinationAddress == "" {
+		return
+	}
+	TcpProxy(rw, ConID, DestinationAddress, tlsmesage[:rlen])
+}
+
 
 func GetLogPameters(loglisten *net.UDPConn) (LogMap map[string]string, err error) {
 	logmesage := make([]byte, 512)
@@ -192,6 +241,8 @@ type ConenctionHandler func(*net.TCPConn, int, string)
 func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH ConenctionHandler) {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
+        
+        //Accept new conenctions and handle errors they may cause
 		rw, e := l.AcceptTCP()
 		if e != nil {
 			if ne, ok := e.(net.Error); ok && ne.Temporary() {
@@ -210,6 +261,8 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
 			panic(e)
 		}
 		tempDelay = 0
+
+        //Check if the sender is on the aproved sender list if the list exists
 		Approved := false
 		if len(ApprovedSenders) != 0 {
 			RemoteIP := rw.RemoteAddr().String()
@@ -223,13 +276,15 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
 			Approved = true
 		}
 
+        //Let the sender go if it was not on the approved list
 		if !Approved {
 			rw.SetLinger(0)
 			rw.Close()
 			continue
 		}
-		DestinationAddress := ""
+
 		//Try to get a destination address from IPtables
+		DestinationAddress := ""
 		if loglisten != nil {
 			LogMap, err := GetLogPameters(loglisten)
 			if err == nil {
@@ -241,79 +296,17 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
 				}
 			}
 		}
+
+        //Give the connection away to a forutine that will handle it
 		ConID++
-		conH(rw, ConID, DestinationAddress)
+		go conH(rw, ConID, DestinationAddress)
 	}
 }
 
-func TLSConHandler(rw *net.TCPConn, ConID int, DestinationAddress string) {
-	tlsmesage := make([]byte, 2048)
-	rlen, _ := rw.Read(tlsmesage)
-	if rlen > 42 && tlsmesage[0] == 0x16 && tlsmesage[5] == 0x01 {
-		//If we are to use TLS SNI Extention header as the destination address
-		ExtractedHost := clientHelloMsg(tlsmesage[5:rlen])
-
-		if ExtractedHost == "" {
-			log.Println(ConID, "Could not find SNI")
-		} else if DestinationAddress == "" {
-			DestinationAddress = ExtractedHost + ":https"
-		} else {
-			log.Println(ConID, "ExtractedHost: ", ExtractedHost)
-		}
-	} else {
-		log.Println(ConID, "Not a client message")
-	}
-	if DestinationAddress == "" {
-		return
-	}
-	log.Println(ConID, "TLS:", DestinationAddress)
-	for _, AmericanSite := range AmericanSites {
-		if strings.Contains(DestinationAddress, AmericanSite) {
-			log.Println("Tuneling:", DestinationAddress)
-			DestinationAddress = "avpsserver.example.com:443"
-			break
-		}
-	}
-	go TcpProxy(rw, ConID, DestinationAddress, tlsmesage[:rlen])
-}
-func httpConHandler(rw *net.TCPConn, ConID int, DestinationAddress string) {
-	Sc := httputil.NewServerConn(rw, nil)
-	go HandleClient(Sc, ConID, DestinationAddress)
-}
-
-func CopyCD(In *net.TCPConn, Out *net.TCPConn) {
-	for {
-		data := make([]byte, 256)
-		n, err := In.Read(data)
-		if err != nil {
-			return
-		}
-		n, err = Out.Write(data[:n])
-		if err != nil {
-			return
-		}
-	}
-
-}
-
-func TcpProxy(Sc *net.TCPConn, ThisClient int, DestinationAddress string, AddData []byte) {
-	TcAd, _ := net.ResolveTCPAddr("tcp", DestinationAddress)
-	NetServerConnection, err := net.DialTCP("tcp", nil, TcAd)
-	if err != nil {
-		log.Println(ThisClient, "could not connect to server:", DestinationAddress)
-		return
-	}
-	NetServerConnection.Write(AddData)
-	defer NetServerConnection.Close()
-	defer Sc.Close()
-
-	go CopyCD(NetServerConnection, Sc)
-	CopyCD(Sc, NetServerConnection)
-
-}
 
 func main() {
 	ConID = 0
+    IsInAmerica = false
 	AmericanSites = []string{"netflix.com"}
 	ApprovedSenders = []string{}
 
@@ -418,4 +411,34 @@ func clientHelloMsg(data []byte) string {
 		data = data[length:]
 	}
 	return ""
+}
+
+func CopyCD(In *net.TCPConn, Out *net.TCPConn) {
+	for {
+		data := make([]byte, 256)
+		n, err := In.Read(data)
+		if err != nil {
+			return
+		}
+		n, err = Out.Write(data[:n])
+		if err != nil {
+			return
+		}
+	}
+
+}
+
+func TcpProxy(Sc *net.TCPConn, ThisClient int, DestinationAddress string, AddData []byte) {
+	TcAd, _ := net.ResolveTCPAddr("tcp", DestinationAddress)
+	NetServerConnection, err := net.DialTCP("tcp", nil, TcAd)
+	if err != nil {
+		log.Println(ThisClient, "could not connect to server:", DestinationAddress)
+		return
+	}
+	NetServerConnection.Write(AddData)
+	defer NetServerConnection.Close()
+
+	go CopyCD(NetServerConnection, Sc)
+	CopyCD(Sc, NetServerConnection)
+
 }

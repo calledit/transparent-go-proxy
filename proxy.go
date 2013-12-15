@@ -133,10 +133,10 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress st
 				DestinationAddress = r.URL.Host + ":" + r.URL.Scheme
 			}
 
-            DestinationAddress = FilterAmericanSites(DestinationAddress, "avpsserver.example.com:80")
-	        if DestinationAddress == "" {
-		        return
-	        }
+			DestinationAddress = FilterAmericanSites(DestinationAddress, "avpsserver.example.com:80")
+			if DestinationAddress == "" {
+				return
+			}
 
 			NetServerConnection, err := net.Dial("tcp", DestinationAddress)
 			if err != nil {
@@ -165,21 +165,21 @@ func HandleClient(Sc *httputil.ServerConn, ThisClient int, DestinationAddress st
 }
 
 func FilterAmericanSites(DestinationAddress string, ProxyServer string) string {
-    IsAmericanSite := false
+	IsAmericanSite := false
 	for _, AmericanSite := range AmericanSites {
 		if strings.Contains(DestinationAddress, AmericanSite) {
-            IsAmericanSite = true
-            if !IsInAmerica {
-			    log.Println("Tuneling:", DestinationAddress)
-			    return ProxyServer
-            }
+			IsAmericanSite = true
+			if !IsInAmerica {
+				log.Println("Tuneling:", DestinationAddress)
+				return ProxyServer
+			}
 		}
 	}
-    if IsInAmerica && !IsAmericanSite {
+	if IsInAmerica && !IsAmericanSite {
 		log.Println(ConID, "American Server can only access american sites")
-        return ""
-    }
-    return DestinationAddress
+		return ""
+	}
+	return DestinationAddress
 }
 
 func TLSConHandler(rw *net.TCPConn, ConID int, DestinationAddress string) {
@@ -204,13 +204,12 @@ func TLSConHandler(rw *net.TCPConn, ConID int, DestinationAddress string) {
 		return
 	}
 	log.Println(ConID, "TLS:", DestinationAddress)
-    DestinationAddress = FilterAmericanSites(DestinationAddress, "avpsserver.example.com:443")
+	DestinationAddress = FilterAmericanSites(DestinationAddress, "avpsserver.example.com:443")
 	if DestinationAddress == "" {
 		return
 	}
 	TcpProxy(rw, ConID, DestinationAddress, tlsmesage[:rlen])
 }
-
 
 func GetLogPameters(loglisten *net.UDPConn) (LogMap map[string]string, err error) {
 	logmesage := make([]byte, 512)
@@ -241,8 +240,8 @@ type ConenctionHandler func(*net.TCPConn, int, string)
 func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH ConenctionHandler) {
 	var tempDelay time.Duration // how long to sleep on accept failure
 	for {
-        
-        //Accept new conenctions and handle errors they may cause
+
+		//Accept new conenctions and handle errors they may cause
 		rw, e := l.AcceptTCP()
 		if e != nil {
 			if ne, ok := e.(net.Error); ok && ne.Temporary() {
@@ -262,7 +261,7 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
 		}
 		tempDelay = 0
 
-        //Check if the sender is on the aproved sender list if the list exists
+		//Check if the sender is on the aproved sender list if the list exists
 		Approved := false
 		if len(ApprovedSenders) != 0 {
 			RemoteIP := rw.RemoteAddr().String()
@@ -276,7 +275,7 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
 			Approved = true
 		}
 
-        //Let the sender go if it was not on the approved list
+		//Let the sender go if it was not on the approved list
 		if !Approved {
 			rw.SetLinger(0)
 			rw.Close()
@@ -297,16 +296,15 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
 			}
 		}
 
-        //Give the connection away to a forutine that will handle it
+		//Give the connection away to a forutine that will handle it
 		ConID++
 		go conH(rw, ConID, DestinationAddress)
 	}
 }
 
-
 func main() {
 	ConID = 0
-    IsInAmerica = false
+	IsInAmerica = false
 	AmericanSites = []string{"netflix.com"}
 	ApprovedSenders = []string{}
 

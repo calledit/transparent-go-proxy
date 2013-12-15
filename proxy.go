@@ -25,6 +25,7 @@ type BlockString struct {
 
 var ConID int
 var AmericanSites []string
+var ApprovedSenders []string
 func (ins *ScriptInserter) Write(p []byte) (n int, err error) {
 	Befn := 0
 	if !ins.HasInserted {
@@ -209,7 +210,24 @@ func AcceptConenctions(l *net.TCPListener, loglisten *net.UDPConn, conH Conencti
             panic(e)
         }
         tempDelay = 0
+        Approved := false
+        if len(ApprovedSenders) != 0 {
+            RemoteIP := rw.RemoteAddr().String()
+            for _, ApprovedSender := range ApprovedSenders {
+                if strings.Contains(RemoteIP, ApprovedSender) {
+                    Approved = true
+                    break;
+                }
+            }
+        }else{
+            Approved = true
+        }
 
+        if !Approved {
+            rw.SetLinger(0)
+            rw.Close()
+            continue
+        }
         DestinationAddress := "" 
         //Try to get a destination address from IPtables
         if loglisten != nil {
@@ -300,6 +318,7 @@ func TcpProxy(Sc *net.TCPConn, ThisClient int, DestinationAddress string, AddDat
 func main() {
     ConID = 0
 	AmericanSites = []string{"netflix.com"}
+	ApprovedSenders = []string{}
 
     addr,_ := net.ResolveUDPAddr("udp", "127.0.0.1:48786")
     loglisten, err := net.ListenUDP("udp", addr)
